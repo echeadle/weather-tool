@@ -4,7 +4,7 @@ A weather lookup tool for use by other tools and skills (e.g. `/schedule`, weath
 
 ## Status
 
-Phase 2 complete (2026-04-29) — NWS roundtrip with file-based cache. CLI subcommands and formatting are next.
+Phase 3b complete (2026-04-30) — added `hourly` subcommand and active-alert banner folded into all forecast outputs. Next up is the `today` outdoor-friendly verdict (Phase 4).
 
 ## Files
 
@@ -24,13 +24,28 @@ pip install -r requirements.txt
 cp config.example.py config.py
 # Edit config.py — set HOME_LAT, HOME_LON, USER_AGENT_CONTACT
 
-# Run
+# Run — see available subcommands
 python weather_tool.py
+
+# 7-day forecast (JSON)
+python weather_tool.py forecast
+
+# 3-day forecast (human-readable)
+python weather_tool.py forecast --days 3 --format markdown
+
+# Next 24 hours, hourly
+python weather_tool.py hourly --format markdown
+
+# Current period only
+python weather_tool.py current --format markdown
 ```
+
+All forecast outputs include any active NWS alerts: as an `"alerts"` array
+in the JSON wrapper, and as a brief banner above the markdown output.
 
 `config.py` is gitignored. The `USER_AGENT_CONTACT` value goes into the User-Agent header on every NWS request — [NWS asks API users to identify themselves](https://www.weather.gov/documentation/services-web-api#/) with a contact address.
 
-Forecasts are cached at `~/.cache/weather-tool/`: points metadata for 30 days, forecast data for 1 hour.
+Forecasts are cached at `~/.cache/weather-tool/`: points metadata for 30 days, forecast data for 1 hour, alerts for 10 minutes.
 
 ## Origin
 
