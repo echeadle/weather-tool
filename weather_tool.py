@@ -85,7 +85,7 @@ def _period_line(label: str, period: dict) -> str:
     temp = f"{period['temperature']}°{period['temperatureUnit']}"
     short = period["shortForecast"]
     precip = period.get("probabilityOfPrecipitation", {}).get("value")
-    precip_str = f" / {precip}% precip" if precip else ""
+    precip_str = f" / {precip}% precip" if precip is not None else ""
     return f"- **{label}** — {temp} · {short}{precip_str}"
 
 
@@ -138,7 +138,11 @@ def alerts_banner(alerts: list[dict]) -> list[str]:
 
 def cmd_forecast(args: argparse.Namespace) -> None:
     forecast = fetch_forecast(HOME_LAT, HOME_LON)
-    alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    try:
+        alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    except Exception as e:
+        print(f"warning: alerts unavailable ({e})", file=sys.stderr)
+        alerts = []
     forecast["properties"]["periods"] = forecast["properties"]["periods"][:args.days * 2]
 
     if args.format == "json":
@@ -163,7 +167,7 @@ def cmd_forecast(args: argparse.Namespace) -> None:
             high = f"{p['temperature']}°{p['temperatureUnit']}"
             low = f"{night['temperature']}°{night['temperatureUnit']}" if night else "—"
             precip = p.get("probabilityOfPrecipitation", {}).get("value")
-            cond = p["shortForecast"] + (f" / {precip}% precip" if precip else "")
+            cond = p["shortForecast"] + (f" / {precip}% precip" if precip is not None else "")
             rows.append([p["name"], high, low, cond])
             i += 2 if night else 1
         else:
@@ -174,7 +178,11 @@ def cmd_forecast(args: argparse.Namespace) -> None:
 
 def cmd_hourly(args: argparse.Namespace) -> None:
     hourly = fetch_hourly(HOME_LAT, HOME_LON)
-    alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    try:
+        alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    except Exception as e:
+        print(f"warning: alerts unavailable ({e})", file=sys.stderr)
+        alerts = []
     hourly["properties"]["periods"] = hourly["properties"]["periods"][:args.hours]
 
     if args.format == "json":
@@ -190,7 +198,11 @@ def cmd_hourly(args: argparse.Namespace) -> None:
 
 def cmd_current(args: argparse.Namespace) -> None:
     forecast = fetch_forecast(HOME_LAT, HOME_LON)
-    alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    try:
+        alerts = fetch_alerts(HOME_LAT, HOME_LON)
+    except Exception as e:
+        print(f"warning: alerts unavailable ({e})", file=sys.stderr)
+        alerts = []
     period = forecast["properties"]["periods"][0]
 
     if args.format == "json":
