@@ -41,6 +41,12 @@ def test_days_cap_does_not_cut_last_low():
     assert rows[-1][:3] == ["Wednesday", "70°F", "45°F"]
 
 
+def test_json_slice_keeps_last_low_in_evening():
+    kept = EVENING[:w.json_period_count(EVENING, days=3)]
+    assert kept[-1]["name"] == "Wednesday Night"
+    assert len(DAY_FIRST[:w.json_period_count(DAY_FIRST, days=2)]) == 4
+
+
 # --- cached_get (review findings #2 and #3) --------------------------------
 
 URL = "https://api.weather.gov/test"

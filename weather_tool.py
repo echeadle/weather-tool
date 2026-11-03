@@ -195,7 +195,8 @@ def cmd_forecast(args: argparse.Namespace) -> None:
         alerts = []
 
     if args.format == "json":
-        forecast["properties"]["periods"] = forecast["properties"]["periods"][:args.days * 2]
+        periods = forecast["properties"]["periods"]
+        forecast["properties"]["periods"] = periods[:json_period_count(periods, args.days)]
         print(json.dumps({"alerts": alerts, "forecast": forecast}, indent=2))
         return
 
@@ -220,6 +221,16 @@ def _temp(period: dict) -> str:
 def _conditions(period: dict) -> str:
     precip = period.get("probabilityOfPrecipitation", {}).get("value")
     return period["shortForecast"] + (f" / {precip}% precip" if precip is not None else "")
+
+
+def json_period_count(periods: list[dict], days: int) -> int:
+    """Periods to keep for --days N, matching forecast_rows' day count.
+
+    Normally 2 per day. A leading "Tonight" period is a whole day by itself,
+    so it takes one slot and the remaining N-1 days get 2 each.
+    """
+    starts_at_night = bool(periods) and not periods[0].get("isDaytime", True)
+    return days * 2 - 1 if starts_at_night else days * 2
 
 
 def forecast_rows(periods: list[dict], days: int) -> list[list[str]]:
