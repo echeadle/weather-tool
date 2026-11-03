@@ -11,17 +11,18 @@ Phase 3b complete (2026-04-30) — added `hourly` subcommand and active-alert ba
 - `SPEC.md` — design doc with all DECIDE items locked
 - `weather_tool.py` — main script (single-file for now)
 - `config.example.py` — copy to `config.py` and fill in your values
-- `requirements.txt` — Python dependencies
+- `pyproject.toml` / `uv.lock` — dependencies (managed by uv; Python pinned in `.python-version`)
+- `tests/` — pytest suite (`uv run pytest`)
 
 ## Setup
 
 ```bash
-# Create a venv (uv shown; python -m venv also works)
-uv venv && source .venv/bin/activate
-pip install -r requirements.txt
+# Create the project-local .venv and install dependencies
+uv sync
 
 # Configure your location and contact info
 cp config.example.py config.py
+chmod 600 config.py   # holds your home coordinates and email
 # Edit config.py — set HOME_LAT, HOME_LON, USER_AGENT_CONTACT
 
 # Run — see available subcommands
