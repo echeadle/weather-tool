@@ -4,7 +4,9 @@
 
 **Architecture:** A pure verdict function scores today's remaining daytime *hourly* periods against configurable thresholds (temp / precip / wind), finds the longest contiguous friendly window, and folds in active alerts. `cmd_today` assembles thresholds from `config` and renders JSON (default) or markdown, matching the existing subcommand pattern.
 
-**Tech stack:** Python 3.12, `requests` (already used), `pytest` (new dev dependency). No new runtime deps.
+**Tech stack:** Python 3.13 (pinned in `.python-version`), managed by uv (`pyproject.toml` + `uv.lock`). `requests` (already used), `pytest` (already in the `dev` dependency group). No new runtime or dev deps.
+
+> **Updated 2026-11-03:** packaging steps revised for the uv move (merged in 43f5724). Run all Python commands as `uv run ...` from the project root.
 
 ---
 
@@ -22,7 +24,8 @@
   }
   ```
 - The threshold *values* are initial guesses. Per SPEC and the "no automation until the manual version works" rule, they get tuned after a week of real use — Phase 4 makes them configurable and gives sane defaults; it does not claim they're correct yet.
-- No `tests/` dir exists yet; `requirements.txt` is just `requests`.
+- `tests/` already exists: `conftest.py` + `test_weather_tool.py` (10 tests). `pyproject.toml` sets `pythonpath = ["."]`, so `import weather_tool` works from tests without path hacks.
+- Dependencies live in `pyproject.toml`/`uv.lock`; the old `requirements.txt` was removed 2026-11-03.
 
 ## Approach
 
@@ -36,7 +39,7 @@
 - Modify: `config.example.py`, `config.py` — add threshold constants
 - Modify: `weather_tool.py` — verdict helpers + `cmd_today` + argparse wiring; bump `USER_AGENT` version
 - Create: `tests/test_verdict.py`, `tests/fixtures/hourly_sample1.json`, `tests/fixtures/hourly_sample2.json`
-- Modify: `requirements.txt` (or a dev note) — add `pytest`
+- No packaging changes needed — `pytest` is already a dev dependency
 - Update at end: `README.md` (document the new subcommand)
 
 ---
@@ -75,7 +78,7 @@ THRESHOLDS = {
 
 **Done When (4a):**
 - [ ] `config.example.py` and `config.py` both contain the five threshold constants
-- [ ] `python -c "import weather_tool"` imports without error (fallbacks work even if a constant is missing)
+- [ ] `uv run python -c "import weather_tool"` imports without error (fallbacks work even if a constant is missing)
 
 ---
 
@@ -158,7 +161,7 @@ def build_verdict(hourly: dict, alerts: list[dict], thresholds: dict) -> dict:
 ```
 
 ### Task 9: Write unit tests (`tests/test_verdict.py`)
-Install pytest first: `uv pip install pytest` (in the project `.venv`), and add `pytest` to `requirements.txt`.
+pytest is already installed via the `dev` group (`uv sync` installs it). Put these alongside the existing `tests/test_weather_tool.py`.
 ```python
 import weather_tool as wt
 
@@ -192,7 +195,7 @@ def test_verdict_alert_forces_unfriendly():
 Note: tests that rely on "today's remaining hours" use fixed dates — for those, either freeze `now` or test `longest_friendly_window`/`hour_is_friendly` directly (done above) to keep them deterministic. Keep date-sensitive assertions out of unit tests; cover that path in the real-fixture check in 4d.
 
 **Done When (4b):**
-- [ ] `pytest tests/test_verdict.py -v` → all pass
+- [ ] `uv run pytest tests/test_verdict.py -v` → all pass
 - [ ] `parse_wind_mph`, `hour_is_friendly`, `longest_friendly_window`, `build_verdict` exist and are import-clean
 
 ---
@@ -258,14 +261,14 @@ Add a short note to `SPEC.md` (or a `current_context.md`) that the threshold val
 
 **Done When (4d):**
 - [ ] Two real hourly fixtures saved under `tests/fixtures/`
-- [ ] `pytest -v` passes including the fixture test
+- [ ] `uv run pytest -v` passes including the fixture test (and the existing 10)
 - [ ] Tuning follow-up recorded
 
 ---
 
 ## Verification (whole phase)
 
-- `pytest -v` → green
+- `uv run pytest -v` → green
 - `weather-tool today` and `weather-tool today --format markdown` run against live/cached data without error
 - Manual sanity check: does the verdict match what the raw `hourly` output implies for today?
 
