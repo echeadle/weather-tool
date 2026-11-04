@@ -3,7 +3,9 @@
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +20,8 @@ CACHE_DIR = Path.home() / ".cache" / "weather-tool"
 POINTS_TTL = timedelta(days=30)
 FORECAST_TTL = timedelta(hours=1)
 ALERTS_TTL = timedelta(minutes=10)
+# How far past its TTL a cached copy may still be served when NWS is unreachable.
+STALE_GRACE = timedelta(hours=6)
 
 
 def cache_path(url: str) -> Path:
@@ -25,27 +29,73 @@ def cache_path(url: str) -> Path:
     return CACHE_DIR / f"{key}.json"
 
 
+def _read_cache(path: Path) -> dict | None:
+    """Return {"fetched": datetime, "data": ...}, or None if absent or unreadable.
+
+    An unreadable entry (truncated write, hand edit) is treated as a miss rather
+    than an error, so one bad file can't break every later run.
+    """
+    try:
+        entry = json.loads(path.read_text())
+        return {"fetched": datetime.fromisoformat(entry["fetched_at"]), "data": entry["data"]}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"warning: ignoring unreadable cache file {path.name} ({e})", file=sys.stderr)
+        return None
+
+
+def _write_cache(path: Path, url: str, data: dict) -> None:
+    """Write atomically (temp file + os.replace) so a crash never leaves half a file.
+
+    The cache holds the home coordinates (in the URL), so the directory is 0700.
+    A failed write only warns: the fetched data is still good.
+    """
+    try:
+        CACHE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        CACHE_DIR.chmod(0o700)  # mkdir's mode is ignored when the dir already exists
+        fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump({
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "url": url,
+                    "data": data,
+                }, f)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+    except OSError as e:
+        print(f"warning: could not write cache ({e})", file=sys.stderr)
+
+
 def cached_get(session: requests.Session, url: str, ttl: timedelta) -> dict:
     path = cache_path(url)
-    if path.exists():
-        entry = json.loads(path.read_text())
-        fetched = datetime.fromisoformat(entry["fetched_at"])
-        age = datetime.now(timezone.utc) - fetched
-        if age < ttl:
-            print(f"cache hit  ({int(age.total_seconds())}s old) {url}", file=sys.stderr)
-            return entry["data"]
+    entry = _read_cache(path)
+    age = datetime.now(timezone.utc) - entry["fetched"] if entry else None
+    if entry and age < ttl:
+        print(f"cache hit  ({int(age.total_seconds())}s old) {url}", file=sys.stderr)
+        return entry["data"]
 
     print(f"cache miss             {url}", file=sys.stderr)
-    resp = session.get(url, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = session.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        # NWS has frequent short 5xx outages. Serve a recently expired copy rather
+        # than failing, but never one so old it would mislead.
+        if entry is None or age > ttl + STALE_GRACE:
+            raise
+        print(
+            f"warning: fetch failed ({e}); using cached copy "
+            f"{int(age.total_seconds() // 60)}m old for {url}",
+            file=sys.stderr,
+        )
+        return entry["data"]
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "url": url,
-        "data": data,
-    }))
+    _write_cache(path, url, data)
     return data
 
 
@@ -143,9 +193,10 @@ def cmd_forecast(args: argparse.Namespace) -> None:
     except Exception as e:
         print(f"warning: alerts unavailable ({e})", file=sys.stderr)
         alerts = []
-    forecast["properties"]["periods"] = forecast["properties"]["periods"][:args.days * 2]
 
     if args.format == "json":
+        periods = forecast["properties"]["periods"]
+        forecast["properties"]["periods"] = periods[:json_period_count(periods, args.days)]
         print(json.dumps({"alerts": alerts, "forecast": forecast}, indent=2))
         return
 
@@ -156,24 +207,51 @@ def cmd_forecast(args: argparse.Namespace) -> None:
         lines.append(f"_Updated: {updated}_")
     lines.append("")
 
-    periods = forecast["properties"]["periods"]
+    # Build rows from the full period list, then cap by --days. Slicing periods
+    # first would cut the last day's low when the list starts with "Tonight".
+    rows = forecast_rows(forecast["properties"]["periods"], args.days)
+    lines.extend(_table(["Day", "High", "Low", "Conditions"], rows))
+    print("\n".join(lines))
+
+
+def _temp(period: dict) -> str:
+    return f"{period['temperature']}°{period['temperatureUnit']}"
+
+
+def _conditions(period: dict) -> str:
+    precip = period.get("probabilityOfPrecipitation", {}).get("value")
+    return period["shortForecast"] + (f" / {precip}% precip" if precip is not None else "")
+
+
+def json_period_count(periods: list[dict], days: int) -> int:
+    """Periods to keep for --days N, matching forecast_rows' day count.
+
+    Normally 2 per day. A leading "Tonight" period is a whole day by itself,
+    so it takes one slot and the remaining N-1 days get 2 each.
+    """
+    starts_at_night = bool(periods) and not periods[0].get("isDaytime", True)
+    return days * 2 - 1 if starts_at_night else days * 2
+
+
+def forecast_rows(periods: list[dict], days: int) -> list[list[str]]:
+    """Pair NWS day/night periods into [name, high, low, conditions] rows.
+
+    In the evening NWS starts with a night period ("Tonight") that has no day
+    before it; it gets its own row with only a low, and counts as today.
+    """
     rows = []
     i = 0
-    while i < len(periods):
+    while i < len(periods) and len(rows) < days:
         p = periods[i]
         if p.get("isDaytime", True):
             nxt = periods[i + 1] if i + 1 < len(periods) else None
             night = nxt if nxt and not nxt.get("isDaytime", True) else None
-            high = f"{p['temperature']}°{p['temperatureUnit']}"
-            low = f"{night['temperature']}°{night['temperatureUnit']}" if night else "—"
-            precip = p.get("probabilityOfPrecipitation", {}).get("value")
-            cond = p["shortForecast"] + (f" / {precip}% precip" if precip is not None else "")
-            rows.append([p["name"], high, low, cond])
+            rows.append([p["name"], _temp(p), _temp(night) if night else "—", _conditions(p)])
             i += 2 if night else 1
         else:
+            rows.append([p["name"], "—", _temp(p), _conditions(p)])
             i += 1
-    lines.extend(_table(["Day", "High", "Low", "Conditions"], rows))
-    print("\n".join(lines))
+    return rows
 
 
 def cmd_hourly(args: argparse.Namespace) -> None:
